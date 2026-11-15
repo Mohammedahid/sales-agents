@@ -23,6 +23,7 @@ class Brand:
     key: str                 # "seen" / "nvolve"
     name: str                # brand display name
     agent_name: str          # persona name shown to customers
+    agent_female: bool       # persona speaks as a woman (Arabic grammar)
     human_name: str          # real employee who takes over
     phone_number_id: str     # WhatsApp Cloud API phone number id
     access_token: str        # WhatsApp token for this number
@@ -50,6 +51,7 @@ def _brand(key: str, default_name: str, default_desc: str) -> Brand:
         key=key,
         name=_env(f"{p}_NAME", default_name),
         agent_name=_env(f"{p}_AGENT_NAME", "فهد"),
+        agent_female=_env(f"{p}_AGENT_GENDER", "female" if key == "nvolve" else "male").lower().startswith("f"),
         human_name=_env(f"{p}_HUMAN_NAME", "مسؤول المبيعات"),
         phone_number_id=_env(f"{p}_PHONE_NUMBER_ID"),
         access_token=_env(f"{p}_WA_TOKEN") or _env("WA_ACCESS_TOKEN"),

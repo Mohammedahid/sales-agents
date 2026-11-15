@@ -1,8 +1,9 @@
 """System prompts for the WhatsApp sales agents and the Telegram admin assistant."""
 from .config import Brand
 
-SALES_PROMPT = """أنت {agent_name}، موظف مبيعات في {brand_name} ({description}).
+SALES_PROMPT = """أنت {agent_name}، {role} في {brand_name} ({description}).
 تتواصل مع العملاء على واتساب.
+{gender_note}
 
 ## أسلوبك
 - اكتب زي موظف مبيعات سعودي حقيقي يرد من جواله: كلام بسيط وعفوي ومختصر.
@@ -65,7 +66,14 @@ ADMIN_PROMPT = """أنت مساعد إداري لصاحب الشركة على ت
 
 def sales_prompt(brand: Brand) -> str:
     kb = brand.knowledge.strip() or "(لسا ما انضافت معلومات تفصيلية. أي سؤال تفصيلي حوّله لموظف.)"
+    if brand.agent_female:
+        role = "موظفة مبيعات"
+        gender_note = ("اسمك اسم بنت، فتكلمي عن نفسك دايماً بصيغة المؤنث "
+                       "(مثل: أنا موجودة، حاضرة، أرتب لك، بتواصل معك)، وخاطبي العميل عادي.")
+    else:
+        role, gender_note = "موظف مبيعات", "تكلم عن نفسك بصيغة المذكر."
     return SALES_PROMPT.format(
+        role=role, gender_note=gender_note,
         agent_name=brand.agent_name,
         brand_name=brand.name,
         description=brand.description,
