@@ -84,15 +84,28 @@ class Template:
         return self.body.replace("{{1}}", name or settings.default_contact_name)
 
 
+def _find_media(name):
+    return next((TEMPLATES_DIR / f"{name}{ext}" for ext in MEDIA_TYPES if (TEMPLATES_DIR / f"{name}{ext}").exists()), None)
+
+
 def get_template(arg: str) -> Optional[Template]:
-    """'seen' → the brand's default template; 'seen_restaurants' → that template."""
+    """'seen' → the brand's default template; 'seen_restaurants' → that template.
+    'xxx_auto' → 'xxx' before noon (Riyadh time) and 'xxx_evening' after noon."""
     arg = (arg or "").strip().lower()
     name = settings.brands[arg].template_name if arg in settings.brands else arg
+    if name.endswith("_auto"):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        base = name[: -len("_auto")]
+        hour = datetime.now(ZoneInfo(settings.timezone)).hour
+        name = base if hour < 12 else f"{base}_evening"
     brand = settings.brands.get(name.split("_")[0])
     body_path = TEMPLATES_DIR / f"{name}.txt"
     if not brand or not body_path.exists():
         return None
-    media = next((TEMPLATES_DIR / f"{name}{ext}" for ext in MEDIA_TYPES if (TEMPLATES_DIR / f"{name}{ext}").exists()), None)
+    media = _find_media(name)
+    if not media and name.endswith("_evening"):   # evening version reuses the morning video/PDF
+        media = _find_media(name[: -len("_evening")])
     header, mime = MEDIA_TYPES[media.suffix.lower()] if media else (None, "")
     return Template(name, brand, body_path.read_text(encoding="utf-8").strip(), media, header, mime)
 
