@@ -1,7 +1,9 @@
 """FastAPI app: WhatsApp webhook + background Telegram bot / monitors."""
 import asyncio
 import logging
+import os
 import random
+import time
 from contextlib import asynccontextmanager
 
 from pathlib import Path
@@ -18,11 +20,27 @@ log = logging.getLogger("main")
 logging.getLogger("httpx").setLevel(logging.WARNING)  # don't print URLs that contain the bot token
 
 _pending: dict = {}  # (brand, customer) -> asyncio.Task (debounce timers)
+LAST_ERROR: dict = {"time": 0, "text": ""}
+
+
+async def keepalive_loop():
+    """Free hosting sleeps after ~15 min without visits: ping our own public URL every 10 min."""
+    url = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("PUBLIC_URL")
+    if not url:
+        return
+    import httpx
+    async with httpx.AsyncClient(timeout=30) as http:
+        while True:
+            await asyncio.sleep(600)
+            try:
+                await http.get(url.rstrip("/") + "/health")
+            except Exception as e:
+                log.warning("keepalive failed: %s", e)
 
 
 @asynccontextmanager
 async def lifespan(app):
-    tasks = [asyncio.create_task(c()) for c in (tg.polling_loop, tg.daily_report_loop, tg.health_loop)]
+    tasks = [asyncio.create_task(c()) for c in (tg.polling_loop, tg.daily_report_loop, tg.health_loop, keepalive_loop)]
     log.info("started. brands: %s", {k: bool(b.phone_number_id) for k, b in settings.brands.items()})
     yield
     for t in tasks:
@@ -39,7 +57,8 @@ async def privacy():
 
 @app.get("/health")
 async def healthcheck():
-    return {"ok": True}
+    return {"ok": True, "last_error": LAST_ERROR["text"] or None,
+            "last_error_minutes_ago": int((time.time() - LAST_ERROR["time"]) / 60) if LAST_ERROR["time"] else None}
 
 
 @app.get("/webhook/whatsapp")
@@ -161,11 +180,20 @@ async def _reply_after_delay(brand, customer, last_msg_id):
         return
     _pending.pop(key, None)  # past this point we don't get cancelled
     await whatsapp.mark_read_typing(brand, last_msg_id)
-    try:
-        reply, handoff = await run_sales_agent(brand, customer)
-    except Exception:
-        log.exception("agent failed")
-        reply, handoff = None, {"reason": "خطأ تقني بالبوت", "summary": "البوت ما قدر يرد، تابع العميل يدوياً"}
+    reply, handoff = None, None
+    for attempt in (1, 2, 3):                      # retry: free AI tiers fail now and then
+        try:
+            reply, handoff = await run_sales_agent(brand, customer)
+            break
+        except Exception as e:
+            log.exception("agent failed (attempt %s)", attempt)
+            LAST_ERROR.update(time=time.time(), text=f"{type(e).__name__}: {str(e)[:200]}")
+            if attempt < 3:
+                await asyncio.sleep(5 * attempt)
+            else:
+                # don't pause the chat — just tell the admin; the next customer message retries
+                await tg.broadcast(f"⚠️ البوت ما قدر يرد على +{customer} ({brand.name}).\n"
+                                   f"السبب: {LAST_ERROR['text']}\nرد عليه بـ Reply هنا أو استنى رسالته الجاية.")
 
     if reply:
         await asyncio.sleep(random.uniform(1.0, 3.0))  # feel natural, not instant

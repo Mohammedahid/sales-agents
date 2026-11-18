@@ -6,6 +6,7 @@ Commands:
   /leads     آخر العملاء المحتملين
   /handoffs  المحادثات المحوّلة للموظفين
   /paused    المحادثات اللي البوت موقف فيها
+  /resume 966XXXXXXXXX   رجّع البوت يرد على عميل (أو /resume all)
   /test_seen    جرّب كأنك زبون على رقم سين
   /test_nvolve  جرّب كأنك زبون على رقم Nvolve
   /endtest      اطلع من وضع التجربة
@@ -14,7 +15,7 @@ Commands:
   /templates   الرسائل الجاهزة (seen_intro، seen_restaurants، nvolve_intro…)
   /intro seen_restaurants 0551234567 محمد   رسالة لرقم واحد
   /campaign seen_restaurants   + الأرقام تحت (كل سطر: الاسم، الرقم)
-  أو ابعت ملف CSV/TXT وبالتعليق: /campaign seen_restaurants
+  أو ابعت ملف Excel أو CSV وبالتعليق: /campaign seen_intro
   (seen لحالها = seen_intro)
   /confirm   ابدأ الإرسال  —  /cancel  إلغاء
   /campaign_report   نتائج آخر الحملات
@@ -66,7 +67,8 @@ async def notify_handoff(brand, customer, reason, summary, wa_name=""):
         f"العميل: {wa_name or '-'} (+{customer})\n"
         f"السبب: {reason}\n\nالملخص: {summary}\n\n"
         f"افتح المحادثة: https://wa.me/{customer}\n"
-        f"↩️ أو اعمل Reply على هالرسالة وبنبعت ردك للعميل من رقم {brand.name}."
+        f"↩️ أو اعمل Reply على هالرسالة وبنبعت ردك للعميل من رقم {brand.name}.\n"
+        f"لما تخلص: /resume {customer}"
     )
     kb = {"inline_keyboard": [[{"text": "▶️ رجّع البوت يرد", "callback_data": f"resume|{brand.key}|{customer}"}]]}
     for mid in await broadcast(text, kb):
@@ -74,8 +76,10 @@ async def notify_handoff(brand, customer, reason, summary, wa_name=""):
 
 
 async def notify_paused_message(brand, customer, preview, wa_name=""):
-    text = f"💬 رسالة جديدة (البوت موقف) — {brand.name}\n{wa_name or ''} +{customer}:\n{preview[:500]}"
-    for mid in await broadcast(text):
+    text = (f"💬 رسالة جديدة (البوت موقف) — {brand.name}\n{wa_name or ''} +{customer}:\n{preview[:500]}\n\n"
+            f"↩️ اعمل Reply على هالرسالة لترد عليه، أو رجّع البوت: /resume {customer}")
+    kb = {"inline_keyboard": [[{"text": "▶️ رجّع البوت يرد", "callback_data": f"resume|{brand.key}|{customer}"}]]}
+    for mid in await broadcast(text, kb):
         db.link_tg(mid, brand.key, customer)
 
 
@@ -92,6 +96,13 @@ async def build_live_context(hours=24):
         )
     paused = db.paused_list()
     lines.append(f"• محادثات مع موظف حالياً: {len(paused)}")
+    try:
+        from .main import LAST_ERROR
+        if LAST_ERROR["time"]:
+            mins = int((time.time() - LAST_ERROR["time"]) / 60)
+            lines.append(f"• آخر خطأ بالذكاء الاصطناعي قبل {mins} دقيقة: {LAST_ERROR['text'][:150]}")
+    except Exception:
+        pass
     return "\n".join(lines)
 
 
@@ -141,6 +152,23 @@ async def handle_update(u):
             return
 
     cmd = text.split()[0].split("@")[0].lower()
+    if cmd == "/resume":
+        from .campaign import normalize_phone
+        parts = text.split()
+        if len(parts) < 2:
+            await send(chat_id, "اكتب: /resume 966XXXXXXXXX  (أو /resume all لكل المحادثات)")
+            return
+        rows = db.paused_list()
+        if parts[1].lower() == "all":
+            targets = [(r["brand"], r["customer"]) for r in rows]
+        else:
+            phone = normalize_phone(parts[1]) or parts[1]
+            targets = [(r["brand"], r["customer"]) for r in rows if r["customer"] == phone]
+        for b, c in targets:
+            db.resume(b, c)
+        await send(chat_id, f"✅ البوت رجع يرد على {len(targets)} محادثة." if targets
+                   else "ما لقيت محادثة موقوفة بهالرقم. شوف /paused")
+        return
     if cmd in ("/campaign", "/intro", "/confirm", "/cancel", "/campaign_report", "/templates"):
         await _handle_campaign_cmd(chat_id, cmd, text)
         return
@@ -198,7 +226,7 @@ async def handle_update(u):
     elif cmd == "/paused":
         rows = db.paused_list()
         await send(chat_id, "\n".join(
-            f"• [{settings.brands[r['brand']].name}] +{r['customer']} — {r['reason']}" for r in rows
+            f"• [{settings.brands[r['brand']].name}] +{r['customer']} — {r['reason']}\n  /resume {r['customer']}" for r in rows
         ) or "البوت شغال على كل المحادثات.")
     else:
         from .agent import run_admin_agent
@@ -299,14 +327,42 @@ async def _handle_campaign_file(chat_id, msg):
     except Exception as e:
         await send(chat_id, f"ما قدرت أنزّل الملف: {e}")
         return
+    fname = (msg["document"].get("file_name") or "").lower()
     text = ""
-    for enc in ("utf-8-sig", "cp1256", "utf-16"):
+    if fname.endswith((".xlsx", ".xlsm")):
         try:
-            text = raw.decode(enc)
-            break
-        except UnicodeDecodeError:
-            continue
+            text = _excel_to_text(raw)
+        except Exception as e:
+            await send(chat_id, f"ما قدرت أقرأ ملف الإكسل: {e}")
+            return
+    else:
+        for enc in ("utf-8-sig", "cp1256", "utf-16"):
+            try:
+                text = raw.decode(enc)
+                break
+            except UnicodeDecodeError:
+                continue
     await _preview_campaign(chat_id, tpl, campaign.parse_contacts(text))
+
+
+def _excel_to_text(raw: bytes) -> str:
+    """First sheet (or one named الأرقام) → lines 'name, phone' for parse_contacts."""
+    import io
+    from openpyxl import load_workbook
+    wb = load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
+    ws = wb["الأرقام"] if "الأرقام" in wb.sheetnames else wb.worksheets[0]
+    lines = []
+    for row in ws.iter_rows(values_only=True):
+        cells = []
+        for v in row:
+            if v is None:
+                continue
+            if isinstance(v, float) and v.is_integer():
+                v = int(v)              # 966551234567.0 → 966551234567
+            cells.append(str(v).strip())
+        if cells:
+            lines.append(", ".join(cells))
+    return "\n".join(lines)
 
 
 async def _handle_campaign_cmd(chat_id, cmd, text):
