@@ -74,6 +74,10 @@ async def run_sales_agent(brand: Brand, customer: str):
         "text": sales_prompt(brand),
         "cache_control": {"type": "ephemeral"},
     }]
+    if _interested(messages) and _missing_lead(brand, customer):
+        system.append({"type": "text", "text":
+                       "## الخطوة الحالية (العميل قال إنه مهتم)\n" + _collect_note(brand, customer)
+                       + "\nإذا العميل سأل سؤال، جاوبه باختصار وبعدها اسأل. لا تعتذر عن شي."})
     # The WhatsApp profile name is NOT given to the model: it must ask the customer for his name.
     system.append({"type": "text", "text":
                    f"رقم العميل: {customer}. ما تعرف اسمه إلا إذا قاله لك بالمحادثة."})
@@ -237,6 +241,20 @@ def _collect_note(brand, customer):
     return ("لا تحوّل العميل الحين ولا تقول إن أحد بيتواصل معه. " + q)
 
 
+INTEREST_HINTS = ("مهتم", "interested", "أبي أجرب", "ابي اجرب", "أبغى أجرب", "ابغى اجرب", "ابي اجربها", "أبي أجربها")
+
+
+def _interested(messages):
+    for m in messages:
+        if m["role"] != "user":
+            continue
+        c = m["content"]
+        text = c if isinstance(c, str) else " ".join(b.get("text", "") for b in c if isinstance(b, dict))
+        if any(w in text for w in INTEREST_HINTS):
+            return True
+    return False
+
+
 def _handoff_allowed(brand, customer, messages):
     text = _last_user_text(messages)
     if any(w in text for w in EXPLICIT_HUMAN_WORDS):
@@ -258,6 +276,9 @@ def _parse_tags(brand, customer, name, text):
     return _TAG_RE.sub("", text).strip(), handoff
 
 
+_APOLOGY_RE = re.compile(r"^\s*(عذراً|عذرا|آسف|اسف|المعذرة|سامحني)[^،,.!؟\n]*(على|عال|ع)\s*\S*(تخبط|لخبطة|الخطأ|الغلط)[،,.!\s]*")
+
+
 async def _run_gemini(brand, customer, name, system_text, messages):
     msgs = [{"role": "system", "content": system_text + GEMINI_TAGS_NOTE}] + _to_openai(messages)
     msg = await _gemini_with_fallback(msgs)
@@ -265,8 +286,10 @@ async def _run_gemini(brand, customer, name, system_text, messages):
     if handoff and not _handoff_allowed(brand, customer, messages):
         # Too early: ask again, this time collecting the missing info instead of handing off.
         msgs.append({"role": "user", "content":
-                     f"(ملاحظة من النظام وليست من العميل: {_collect_note(brand, customer)} اكتب ردك للعميل فقط.)"})
+                     f"(ملاحظة من النظام وليست من العميل: ردك اللي قبل ما انرسل للعميل أبداً، فلا تعتذر ولا تشير له. "
+                     f"{_collect_note(brand, customer)} اكتب ردك للعميل فقط.)"})
         msg = await _gemini_with_fallback(msgs)
         reply, _ = _parse_tags(brand, customer, name, msg.get("content") or "")
         handoff = None
+    reply = _APOLOGY_RE.sub("", reply).strip()
     return reply, handoff
