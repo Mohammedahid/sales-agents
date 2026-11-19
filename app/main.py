@@ -106,8 +106,16 @@ async def _handle_change(field, value):
     if field != "messages":
         return
     for st in value.get("statuses", []):
-        err = (st.get("errors") or [{}])[0].get("title", "") if st.get("errors") else ""
+        err = ""
+        if st.get("errors"):
+            e = st["errors"][0]
+            detail = (e.get("error_data") or {}).get("details", "")
+            err = f"{e.get('code', '')} {e.get('title', '')} {detail}".strip()
         db.update_campaign_status(st.get("id", ""), st.get("status", ""), err)
+        if st.get("status") == "failed":
+            log.warning("delivery failed to %s: %s", st.get("recipient_id"), err)
+            await tg.broadcast(f"❌ ما وصلت رسالة لـ +{st.get('recipient_id', '')} ({brand.name})\n"
+                               f"السبب من Meta: {err or 'غير معروف'}")
     names = {c.get("wa_id"): c.get("profile", {}).get("name", "") for c in value.get("contacts", [])}
     for m in value.get("messages", []):
         if db.already_processed(m["id"]):
