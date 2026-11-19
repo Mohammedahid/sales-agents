@@ -312,3 +312,48 @@ def reset_lead(brand, customer):
     """Start fresh for a new intro: forget collected info and the old chat context."""
     save_lead(brand, customer, {"_reset": True})
     add_message(brand, customer, "reset", "")
+
+
+def waiting_for_human():
+    """Paused chats (a human is handling them) whose last message is from the customer."""
+    out = []
+    for p in paused_list():
+        rows = _all("SELECT role, content, ts FROM messages WHERE brand=? AND customer=? AND role!='reset' "
+                    "ORDER BY ts DESC LIMIT 1", (p["brand"], p["customer"]))
+        if rows and rows[0]["role"] == "user":
+            c = json.loads(rows[0]["content"])
+            text = c if isinstance(c, str) else " ".join(b.get("text", "") for b in c if isinstance(b, dict))
+            out.append({"brand": p["brand"], "customer": p["customer"], "ts": rows[0]["ts"],
+                        "preview": text or "(صورة/ملف)", "name": contact_name(p["brand"], p["customer"])})
+    return sorted(out, key=lambda r: r["ts"])
+
+
+def campaign_repliers(campaign_id=None):
+    """Who replied to a campaign, and where each conversation stands now."""
+    if campaign_id is None:
+        r = _all("SELECT id FROM campaigns ORDER BY id DESC LIMIT 1")
+        if not r:
+            return None, []
+        campaign_id = r[0]["id"]
+    rows = _all("SELECT DISTINCT brand, customer FROM campaign_msgs WHERE campaign_id=? AND replied=1",
+                (campaign_id,))
+    waiting = {(w["brand"], w["customer"]) for w in waiting_for_human()}
+    out = []
+    for r in rows:
+        b, c = r["brand"], r["customer"]
+        last = _all("SELECT role, content FROM messages WHERE brand=? AND customer=? AND role='user' "
+                    "ORDER BY ts DESC LIMIT 1", (b, c))
+        preview = ""
+        if last:
+            x = json.loads(last[0]["content"])
+            preview = x if isinstance(x, str) else " ".join(i.get("text", "") for i in x if isinstance(i, dict))
+        if is_opted_out(b, c):
+            state = "optout"
+        elif (b, c) in waiting:
+            state = "waiting"
+        elif is_paused(b, c):
+            state = "human"
+        else:
+            state = "bot"
+        out.append({"brand": b, "customer": c, "state": state, "lead": latest_lead(b, c), "preview": preview})
+    return campaign_id, out

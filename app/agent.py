@@ -66,8 +66,8 @@ def _normalize(history):
 async def run_sales_agent(brand: Brand, customer: str):
     """Returns (reply_text, handoff_dict_or_None)."""
     messages = _normalize(db.history(brand.key, customer))
-    if not messages:
-        return None, None
+    if not messages or messages[-1]["role"] != "user":
+        return None, None  # nothing new from the customer (e.g. already answered)
     name = db.contact_name(brand.key, customer)
     system = [{
         "type": "text",

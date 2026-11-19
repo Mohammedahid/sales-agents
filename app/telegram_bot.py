@@ -5,6 +5,8 @@ Commands:
   /report    التقرير اليومي الآن
   /leads     آخر العملاء المحتملين
   /handoffs  المحادثات المحوّلة للموظفين
+  /waiting   الزباين اللي مستنيين ردك
+  /replies   مين رد على آخر حملة ووين وصل كل واحد
   /paused    المحادثات اللي البوت موقف فيها
   /resume 966XXXXXXXXX   رجّع البوت يرد على عميل (أو /resume all)
   /test_seen    جرّب كأنك زبون على رقم سين
@@ -239,6 +241,52 @@ async def handle_update(u):
         await send(chat_id, "\n\n".join(
             f"• [{settings.brands[r['brand']].name}] +{r['customer']}\n{r['reason']}: {r['summary']}" for r in rows
         ) or "ما في تحويلات مفتوحة.")
+    elif cmd == "/waiting":
+        rows = db.waiting_for_human()
+        if not rows:
+            await send(chat_id, "✅ ما في حد مستني ردك.")
+        else:
+            now = time.time()
+            await send(chat_id, f"⏳ {len(rows)} زبون مستني ردك (الأقدم أول):")
+            for r in rows[:30]:
+                mins = int((now - r["ts"]) / 60)
+                ago = f"{mins} دقيقة" if mins < 60 else f"{mins // 60} ساعة"
+                text = (f"• [{settings.brands[r['brand']].name}] {r['name'] or ''} +{r['customer']} — من {ago}\n"
+                        f"  آخر رسالة: {r['preview'][:150]}\n"
+                        f"  ↩️ اعمل Reply على هالرسالة عشان ترد، أو /resume {r['customer']}")
+                kb = {"inline_keyboard": [[{"text": "▶️ رجّع البوت يرد",
+                                            "callback_data": f"resume|{r['brand']}|{r['customer']}"}]]}
+                mid = await send(chat_id, text, kb)
+                if mid:
+                    db.link_tg(mid, r["brand"], r["customer"])
+    elif cmd == "/replies":
+        parts = text.split()
+        cid, rows = db.campaign_repliers(int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None)
+        if not rows:
+            await send(chat_id, "ما في ردود على الحملة لسا.")
+        else:
+            labels = {"waiting": "⏳ مستني ردك", "human": "👤 محوّل لك", "bot": "🤖 لسا مع البوت",
+                      "optout": "🚫 طلب إيقاف"}
+            counts = {k: sum(1 for r in rows if r["state"] == k) for k in labels}
+            head = (f"📣 ردود حملة #{cid}: {len(rows)}\n" +
+                    "\n".join(f"{labels[k]}: {v}" for k, v in counts.items()) +
+                    "\n\n(👤/⏳ = جمعنا بياناته أو طلب موظف. 🤖 = لسا ما كمّل أسئلة البوت أو رد بشي ثاني)")
+            await send(chat_id, head)
+            order = ["waiting", "human", "bot", "optout"]
+            lines = []
+            for r in sorted(rows, key=lambda r: order.index(r["state"])):
+                ld = r["lead"]
+                info = " | ".join(x for x in (ld.get("name"), ld.get("company"), ld.get("city"), ld.get("call_time")) if x)
+                lines.append(f"{labels[r['state']]} +{r['customer']}" + (f"\n   {info}" if info else "") +
+                             (f"\n   آخر رسالة: {r['preview'][:80]}" if r["preview"] else ""))
+            chunk = ""
+            for line in lines:
+                if len(chunk) + len(line) > 3500:
+                    await send(chat_id, chunk)
+                    chunk = ""
+                chunk += line + "\n"
+            if chunk:
+                await send(chat_id, chunk + "\nللرد على أي واحد: /waiting أو افتح https://wa.me/ مع رقمه")
     elif cmd == "/paused":
         rows = db.paused_list()
         await send(chat_id, "\n".join(
