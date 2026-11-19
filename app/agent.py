@@ -237,7 +237,7 @@ def _collect_note(brand, customer):
              '(إذا بنت قل "أخت"، وإذا ناقص المدينة بس اسأله "وبأي مدينة؟")')
     else:
         q = ('اكتب له بالضبط: "واضح.. اسمح لي بتواصل معك هاتفيا لإعداد الحساب المجاني. '
-             'هل الوقت مناسب الان او تفضل وقت معين؟"')
+             'هل الوقت مناسب الآن أو تفضل وقت معين؟"')
     return ("لا تحوّل العميل الحين ولا تقول إن أحد بيتواصل معه. " + q)
 
 
@@ -279,6 +279,15 @@ def _parse_tags(brand, customer, name, text):
 _APOLOGY_RE = re.compile(r"^\s*(عذراً|عذرا|آسف|اسف|المعذرة|سامحني)[^،,.!؟\n]*(على|عال|ع)\s*\S*(تخبط|لخبطة|الخطأ|الغلط)[،,.!\s]*")
 
 
+# Common model misspellings -> correct word (whole words only).
+WORD_FIXES = {"الحان": "الآن", "الحانه": "الآن", "إسمح": "اسمح", "انشاء الله": "إن شاء الله", "انشالله": "إن شاء الله"}
+_FIX_RE = re.compile(r"(?<![\w])(" + "|".join(map(re.escape, WORD_FIXES)) + r")(?![\w])")
+
+
+def _fix_words(text):
+    return _FIX_RE.sub(lambda m: WORD_FIXES[m.group(1)], text)
+
+
 async def _run_gemini(brand, customer, name, system_text, messages):
     msgs = [{"role": "system", "content": system_text + GEMINI_TAGS_NOTE}] + _to_openai(messages)
     msg = await _gemini_with_fallback(msgs)
@@ -291,5 +300,5 @@ async def _run_gemini(brand, customer, name, system_text, messages):
         msg = await _gemini_with_fallback(msgs)
         reply, _ = _parse_tags(brand, customer, name, msg.get("content") or "")
         handoff = None
-    reply = _APOLOGY_RE.sub("", reply).strip()
+    reply = _fix_words(_APOLOGY_RE.sub("", reply).strip())
     return reply, handoff
