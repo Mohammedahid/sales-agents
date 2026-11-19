@@ -371,6 +371,55 @@ async def _campaign_from_document(chat_id, tpl, document):
 
 
 def _excel_to_text(raw: bytes) -> str:
+    try:
+        return _excel_to_text_openpyxl(raw)
+    except ImportError:
+        return _excel_to_text_stdlib(raw)
+
+
+def _excel_to_text_stdlib(raw: bytes) -> str:
+    """Fallback .xlsx reader (zip + xml) when openpyxl isn't installed."""
+    import io
+    import re as _re
+    import zipfile
+    import xml.etree.ElementTree as ET
+    ns = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+    rel_ns = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
+    z = zipfile.ZipFile(io.BytesIO(raw))
+    shared = []
+    if "xl/sharedStrings.xml" in z.namelist():
+        for si in ET.fromstring(z.read("xl/sharedStrings.xml")).findall("m:si", ns):
+            shared.append("".join(t.text or "" for t in si.iter(f"{{{ns['m']}}}t")))
+    wb = ET.fromstring(z.read("xl/workbook.xml"))
+    rels = ET.fromstring(z.read("xl/_rels/workbook.xml.rels"))
+    targets = {r.get("Id"): r.get("Target") for r in rels}
+    sheets = wb.findall("m:sheets/m:sheet", ns)
+    chosen = next((sh for sh in sheets if sh.get("name") == "الأرقام"), sheets[0])
+    target = targets[chosen.get(rel_ns)].lstrip("/")
+    path = target if target.startswith("xl/") else "xl/" + target
+    lines = []
+    for row in ET.fromstring(z.read(path)).iter(f"{{{ns['m']}}}row"):
+        cells = []
+        for c in row.findall("m:c", ns):
+            t, v = c.get("t"), c.find("m:v", ns)
+            if t == "s" and v is not None:
+                val = shared[int(v.text)]
+            elif t == "inlineStr":
+                val = "".join(x.text or "" for x in c.iter(f"{{{ns['m']}}}t"))
+            elif v is not None:
+                val = v.text or ""
+                if _re.fullmatch(r"\d+\.0+", val) or _re.fullmatch(r"\d+(\.\d+)?E\+?\d+", val, _re.I):
+                    val = str(int(float(val)))
+            else:
+                continue
+            if val.strip():
+                cells.append(val.strip())
+        if cells:
+            lines.append(", ".join(cells))
+    return "\n".join(lines)
+
+
+def _excel_to_text_openpyxl(raw: bytes) -> str:
     """First sheet (or one named الأرقام) → lines 'name, phone' for parse_contacts."""
     import io
     from openpyxl import load_workbook

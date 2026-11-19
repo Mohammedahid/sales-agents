@@ -7,3 +7,4 @@ pypdf>=5.0
 python-dotenv>=1.0
 tzdata
 psycopg[binary]>=3.2
+openpyxl>=3.1
