@@ -110,8 +110,7 @@ async def run_sales_agent(brand: Brand, customer: str):
                     handoff = dict(b.input)
                     out = "تم إبلاغ الفريق. طمّن العميل إن الموظف بيكمل معه هنا."
                 else:
-                    out = ("مرفوض: لا تحوّل الحين ولا تقول إن أحد بيتواصل معه. اسأل العميل سؤال واحد عن أول معلومة ناقصة من: "
-                           + "، ".join(_missing_lead(brand, customer)))
+                    out = "مرفوض: " + _collect_note(brand, customer)
             else:
                 out = "أداة غير معروفة"
             results.append({"type": "tool_result", "tool_use_id": b.id, "content": out})
@@ -218,6 +217,20 @@ def _missing_lead(brand, customer):
     return [label for key, label in REQUIRED_LEAD.items() if not lead.get(key)]
 
 
+def _collect_note(brand, customer):
+    """Instruction telling the model which interest-flow question to ask next."""
+    missing = _missing_lead(brand, customer)
+    if "اسمه" in missing:
+        q = 'اسأله عن اسمه بهالصيغة: "هلا ومرحبا.. ممكن الأسم لا هنت؟"'
+    else:
+        first = (db.latest_lead(brand.key, customer).get("name") or "").split()[:1]
+        first = first[0] if first else ""
+        q = (f'اسأله عن الناقص من ({"، ".join(missing)}) بهالصيغة تقريباً: '
+             f'"والنعم أخ {first}.. وش اسم نشاطكم وبأي مجال وأي مدينة؟" '
+             '(إذا بنت قل "أخت"، وإذا ناقص المدينة بس اسأله "وبأي مدينة؟")')
+    return ("لا تحوّل العميل الحين ولا تقول إن أحد بيتواصل معه. " + q)
+
+
 def _handoff_allowed(brand, customer, messages):
     text = _last_user_text(messages)
     if any(w in text for w in EXPLICIT_HUMAN_WORDS):
@@ -244,11 +257,8 @@ async def _run_gemini(brand, customer, name, system_text, messages):
     reply, handoff = _parse_tags(brand, customer, name, msg.get("content") or "")
     if handoff and not _handoff_allowed(brand, customer, messages):
         # Too early: ask again, this time collecting the missing info instead of handing off.
-        missing = "، ".join(_missing_lead(brand, customer))
         msgs.append({"role": "user", "content":
-                     f"(ملاحظة من النظام وليست من العميل: لا تحوّل العميل الحين ولا تقول إن أحد بيتواصل معه. "
-                     f"العميل مهتم، رحّب فيه باختصار واسأله سؤال واحد بس عن أول معلومة ناقصة من: {missing}. "
-                     f"إذا الناقص هو الاسم، اسأله بهالصيغة: \"يا هلا فيك! ممكن تزودني باسمك؟\". اكتب ردك للعميل فقط.)"})
+                     f"(ملاحظة من النظام وليست من العميل: {_collect_note(brand, customer)} اكتب ردك للعميل فقط.)"})
         msg = await _gemini_with_fallback(msgs)
         reply, _ = _parse_tags(brand, customer, name, msg.get("content") or "")
         handoff = None
