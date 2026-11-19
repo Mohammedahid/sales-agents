@@ -248,7 +248,7 @@ async def _run_gemini(brand, customer, name, system_text, messages):
         msgs.append({"role": "user", "content":
                      f"(ملاحظة من النظام وليست من العميل: لا تحوّل العميل الحين ولا تقول إن أحد بيتواصل معه. "
                      f"العميل مهتم، رحّب فيه باختصار واسأله سؤال واحد بس عن أول معلومة ناقصة من: {missing}. "
-                     f"اكتب ردك للعميل فقط.)"})
+                     f"إذا الناقص هو الاسم، اسأله بهالصيغة: \"يا هلا فيك! ممكن تزودني باسمك؟\". اكتب ردك للعميل فقط.)"})
         msg = await _gemini_with_fallback(msgs)
         reply, _ = _parse_tags(brand, customer, name, msg.get("content") or "")
         handoff = None
