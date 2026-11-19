@@ -106,8 +106,12 @@ async def run_sales_agent(brand: Brand, customer: str):
                 db.save_lead(brand.key, customer, {**b.input, "whatsapp_name": name})
                 out = "تم الحفظ"
             elif b.name == "request_human":
-                handoff = dict(b.input)
-                out = "تم إبلاغ الفريق. طمّن العميل إن الموظف بيكمل معه هنا."
+                if _handoff_allowed(brand, customer, messages):
+                    handoff = dict(b.input)
+                    out = "تم إبلاغ الفريق. طمّن العميل إن الموظف بيكمل معه هنا."
+                else:
+                    out = ("مرفوض: لا تحوّل الحين ولا تقول إن أحد بيتواصل معه. اسأل العميل سؤال واحد عن أول معلومة ناقصة من: "
+                           + "، ".join(_missing_lead(brand, customer)))
             else:
                 out = "أداة غير معروفة"
             results.append({"type": "tool_result", "tool_use_id": b.id, "content": out})
@@ -197,10 +201,31 @@ async def _gemini_with_fallback(msgs):
         return await _gemini_call(msgs, model=settings.gemini_fallback_model)
 
 
-async def _run_gemini(brand, customer, name, system_text, messages):
-    msgs = [{"role": "system", "content": system_text + GEMINI_TAGS_NOTE}] + _to_openai(messages)
-    msg = await _gemini_with_fallback(msgs)
-    text = msg.get("content") or ""
+EXPLICIT_HUMAN_WORDS = ("موظف", "مسؤول", "شخص", "انسان", "إنسان", "اتصل", "اتصال", "كلمني", "مكالمة",
+                        "عرض سعر", "سعر رسمي", "عقد", "فاتورة", "شكوى", "مدير", "أحد يكلمني", "احد يكلمني")
+REQUIRED_LEAD = {"name": "اسمه", "company": "اسم نشاطه ونوعه", "city": "مدينته"}
+
+
+def _last_user_text(messages):
+    for m in reversed(messages):
+        if m["role"] == "user":
+            return " ".join(b.get("text", "") for b in m["content"] if isinstance(b, dict))
+    return ""
+
+
+def _missing_lead(brand, customer):
+    lead = db.latest_lead(brand.key, customer)
+    return [label for key, label in REQUIRED_LEAD.items() if not lead.get(key)]
+
+
+def _handoff_allowed(brand, customer, messages):
+    text = _last_user_text(messages)
+    if any(w in text for w in EXPLICIT_HUMAN_WORDS):
+        return True
+    return not _missing_lead(brand, customer)
+
+
+def _parse_tags(brand, customer, name, text):
     handoff = None
     for kind, body in _TAG_RE.findall(text):
         parts = [x.strip() for x in body.split("|")]
@@ -210,5 +235,21 @@ async def _run_gemini(brand, customer, name, system_text, messages):
                          {**{k: v for k, v in zip(keys, parts) if v}, "whatsapp_name": name})
         else:
             handoff = {"reason": parts[0] if parts else "", "summary": " | ".join(parts[1:])}
-    reply = _TAG_RE.sub("", text).strip()
+    return _TAG_RE.sub("", text).strip(), handoff
+
+
+async def _run_gemini(brand, customer, name, system_text, messages):
+    msgs = [{"role": "system", "content": system_text + GEMINI_TAGS_NOTE}] + _to_openai(messages)
+    msg = await _gemini_with_fallback(msgs)
+    reply, handoff = _parse_tags(brand, customer, name, msg.get("content") or "")
+    if handoff and not _handoff_allowed(brand, customer, messages):
+        # Too early: ask again, this time collecting the missing info instead of handing off.
+        missing = "، ".join(_missing_lead(brand, customer))
+        msgs.append({"role": "user", "content":
+                     f"(ملاحظة من النظام وليست من العميل: لا تحوّل العميل الحين ولا تقول إن أحد بيتواصل معه. "
+                     f"العميل مهتم، رحّب فيه باختصار واسأله سؤال واحد بس عن أول معلومة ناقصة من: {missing}. "
+                     f"اكتب ردك للعميل فقط.)"})
+        msg = await _gemini_with_fallback(msgs)
+        reply, _ = _parse_tags(brand, customer, name, msg.get("content") or "")
+        handoff = None
     return reply, handoff

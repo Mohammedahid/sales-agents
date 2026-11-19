@@ -273,3 +273,26 @@ def campaign_report(limit=3):
         optouts = _all("SELECT COUNT(*) n FROM optout WHERE brand=? AND ts>?", (c["brand"], c["ts"]))[0]["n"]
         out.append({**c, **st, "accepted": len(rows), "replied": replied, "optouts": optouts})
     return out
+
+
+def failed_recipients(hours=72):
+    """Customers whose latest intro/campaign message failed (and nothing newer was sent since)."""
+    since = time.time() - hours * 3600
+    rows = _all("SELECT brand, customer, status, ts FROM campaign_msgs WHERE ts > ? ORDER BY ts", (since,))
+    latest = {}
+    for r in rows:
+        latest[(r["brand"], r["customer"])] = r["status"]
+    out = []
+    for (brand, customer), status in latest.items():
+        if status == "failed" and not is_opted_out(brand, customer):
+            out.append((brand, customer, contact_name(brand, customer)))
+    return out
+
+
+def latest_lead(brand, customer) -> dict:
+    """Merge all saved lead info for this customer (newer values win)."""
+    rows = _all("SELECT data FROM leads WHERE brand=? AND customer=? ORDER BY ts", (brand, customer))
+    merged = {}
+    for r in rows:
+        merged.update({k: v for k, v in json.loads(r["data"]).items() if v})
+    return merged

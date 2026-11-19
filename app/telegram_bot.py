@@ -19,6 +19,7 @@ Commands:
   (seen لحالها = seen_intro)
   /confirm   ابدأ الإرسال  —  /cancel  إلغاء
   /campaign_report   نتائج آخر الحملات
+  /retry_failed seen_intro_auto   أعد الإرسال للأرقام اللي ما وصلتها الرسالة
 Any other text → AI answer about the products & numbers.
 Reply (Telegram "Reply") to a handoff alert → your text is sent to the customer on WhatsApp.
 """
@@ -169,7 +170,7 @@ async def handle_update(u):
         await send(chat_id, f"✅ البوت رجع يرد على {len(targets)} محادثة." if targets
                    else "ما لقيت محادثة موقوفة بهالرقم. شوف /paused")
         return
-    if cmd in ("/campaign", "/intro", "/confirm", "/cancel", "/campaign_report", "/templates"):
+    if cmd in ("/campaign", "/intro", "/confirm", "/cancel", "/campaign_report", "/templates", "/retry_failed"):
         await _handle_campaign_cmd(chat_id, cmd, text)
         return
     if cmd in ("/test_seen", "/test_nvolve"):
@@ -388,6 +389,16 @@ async def _handle_campaign_cmd(chat_id, cmd, text):
             return
         await send(chat_id, f"🚀 بدأ إرسال {tpl.name} لـ {len(pending[1])} رقم. ببعتلك تقرير لما يخلص.")
         asyncio.create_task(campaign.run_campaign(tpl, pending[1], lambda t: send(chat_id, t)))
+    elif cmd == "/retry_failed":
+        tpl = _tpl_arg(text)
+        if not tpl:
+            await send(chat_id, "اكتب: /retry_failed seen_intro_auto\n(بيعيد الإرسال للأرقام اللي ما وصلتها الرسالة آخر 3 أيام)")
+            return
+        contacts = [(c, n) for b, c, n in db.failed_recipients() if b == tpl.brand.key]
+        if not contacts:
+            await send(chat_id, "ما في رسائل فاشلة آخر 3 أيام 👍")
+            return
+        await _preview_campaign(chat_id, tpl, contacts)
     elif cmd == "/cancel":
         _pending_campaign.pop(chat_id, None)
         await send(chat_id, "تم الإلغاء.")
