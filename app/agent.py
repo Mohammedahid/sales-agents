@@ -25,6 +25,7 @@ TOOLS = [
                 "need": {"type": "string", "description": "وش يبغى العميل بالضبط"},
                 "budget": {"type": "string"},
                 "timeline": {"type": "string"},
+                "call_time": {"type": "string", "description": "الوقت اللي يناسب العميل نتصل فيه، زي ما قاله"},
                 "notes": {"type": "string"},
             },
             "required": ["need"],
@@ -183,7 +184,8 @@ def _to_openai(messages):
 GEMINI_TAGS_NOTE = """
 ## مهم: طريقة الأدوات
 ما عندك أدوات برمجية. بدل save_lead و request_human اكتب بآخر ردك سطر منفصل بهالشكل (العميل ما بيشوفه):
-[[LEAD: الاسم | الجهة | المدينة | الاحتياج]]
+[[LEAD: الاسم | الجهة | المدينة | الاحتياج | وقت الاتصال]]
+(اترك الخانة اللي ما تعرفها فاضية، واكتب وقت الاتصال زي ما قاله العميل)
 [[HUMAN: سبب التحويل | ملخص المحادثة واحتياج العميل]]
 اكتب السطر بس لما يلزم، وكل سطر مرة وحدة.
 """
@@ -202,7 +204,8 @@ async def _gemini_with_fallback(msgs):
 
 EXPLICIT_HUMAN_WORDS = ("موظف", "مسؤول", "شخص", "انسان", "إنسان", "اتصل", "اتصال", "كلمني", "مكالمة",
                         "عرض سعر", "سعر رسمي", "عقد", "فاتورة", "شكوى", "مدير", "أحد يكلمني", "احد يكلمني")
-REQUIRED_LEAD = {"name": "اسمه", "company": "اسم نشاطه ونوعه", "city": "مدينته"}
+REQUIRED_LEAD = {"name": "اسمه", "company": "اسم نشاطه ونوعه", "city": "مدينته",
+                 "call_time": "الوقت المناسب للاتصال"}
 
 
 def _last_user_text(messages):
@@ -222,12 +225,15 @@ def _collect_note(brand, customer):
     missing = _missing_lead(brand, customer)
     if "اسمه" in missing:
         q = 'اسأله عن اسمه بهالصيغة: "هلا ومرحبا.. ممكن الأسم لا هنت؟"'
-    else:
+    elif "اسم نشاطه ونوعه" in missing or "مدينته" in missing:
         first = (db.latest_lead(brand.key, customer).get("name") or "").split()[:1]
         first = first[0] if first else ""
-        q = (f'اسأله عن الناقص من ({"، ".join(missing)}) بهالصيغة تقريباً: '
+        q = (f'اسأله عن الناقص من ({"، ".join(m for m in missing if m != "الوقت المناسب للاتصال")}) بهالصيغة تقريباً: '
              f'"والنعم أخ {first}.. وش اسم نشاطكم وبأي مجال وأي مدينة؟" '
              '(إذا بنت قل "أخت"، وإذا ناقص المدينة بس اسأله "وبأي مدينة؟")')
+    else:
+        q = ('اكتب له بالضبط: "واضح.. اسمح لي بتواصل معك هاتفيا لإعداد الحساب المجاني. '
+             'هل الوقت مناسب الان او تفضل وقت معين؟"')
     return ("لا تحوّل العميل الحين ولا تقول إن أحد بيتواصل معه. " + q)
 
 
@@ -243,9 +249,10 @@ def _parse_tags(brand, customer, name, text):
     for kind, body in _TAG_RE.findall(text):
         parts = [x.strip() for x in body.split("|")]
         if kind == "LEAD":
-            keys = ["name", "company", "city", "need"]
+            keys = ["name", "company", "city", "need", "call_time"]
             db.save_lead(brand.key, customer,
-                         {**{k: v for k, v in zip(keys, parts) if v}, "whatsapp_name": name})
+                         {**{k: v for k, v in zip(keys, parts) if v and v not in ("-", "—", "؟")},
+                          "whatsapp_name": name})
         else:
             handoff = {"reason": parts[0] if parts else "", "summary": " | ".join(parts[1:])}
     return _TAG_RE.sub("", text).strip(), handoff

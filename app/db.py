@@ -177,7 +177,7 @@ def save_lead(brand, customer, data: dict):
 
 
 def recent_leads(limit=10):
-    rows = _all("SELECT * FROM leads ORDER BY ts DESC LIMIT ?", (limit,))
+    rows = _all("SELECT * FROM leads WHERE data NOT LIKE '%_reset%' ORDER BY ts DESC LIMIT ?", (limit,))
     for r in rows:
         r["data"] = json.loads(r["data"])
     return rows
@@ -214,7 +214,7 @@ def stats(since_ts: float):
             "messages": _all(
                 "SELECT COUNT(*) c FROM messages WHERE brand=? AND ts>? AND role='user'",
                 (b, since_ts))[0]["c"],
-            "leads": _all("SELECT COUNT(*) c FROM leads WHERE brand=? AND ts>?", (b, since_ts))[0]["c"],
+            "leads": _all("SELECT COUNT(DISTINCT customer) c FROM leads WHERE brand=? AND ts>? AND data NOT LIKE '%_reset%'", (b, since_ts))[0]["c"],
             "handoffs": _all("SELECT COUNT(*) c FROM handoffs WHERE brand=? AND ts>?", (b, since_ts))[0]["c"],
         }
     return out
@@ -294,5 +294,13 @@ def latest_lead(brand, customer) -> dict:
     rows = _all("SELECT data FROM leads WHERE brand=? AND customer=? ORDER BY ts", (brand, customer))
     merged = {}
     for r in rows:
-        merged.update({k: v for k, v in json.loads(r["data"]).items() if v})
+        d = json.loads(r["data"])
+        if d.get("_reset"):  # a new intro was sent: start collecting from scratch
+            merged = {}
+            continue
+        merged.update({k: v for k, v in d.items() if v})
     return merged
+
+
+def reset_lead(brand, customer):
+    save_lead(brand, customer, {"_reset": True})

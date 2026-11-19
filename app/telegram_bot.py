@@ -62,10 +62,25 @@ async def broadcast(text, reply_markup=None):
 
 
 # ---- alerts called from the WhatsApp side -----------------------------------
+NOW_WORDS = ("الحين", "الآن", "الان", "now", "مناسب", "اوكي", "أوكي", "تمام", "يناسب")
+
+
 async def notify_handoff(brand, customer, reason, summary, wa_name=""):
+    lead = db.latest_lead(brand.key, customer)
+    info = ""
+    if lead.get("name") or lead.get("company") or lead.get("city"):
+        info = (f"الاسم: {lead.get('name', '-')}\n"
+                f"النشاط: {lead.get('company', '-')}\n"
+                f"المدينة: {lead.get('city', '-')}\n")
+    call = lead.get("call_time", "")
+    if call:
+        urgent = any(w in call.lower() for w in NOW_WORDS) and not any(
+            w in call for w in ("بكرة", "بكره", "بعد", "الساعة", "الساعه", "مساء", "العصر", "الظهر", "الصبح"))
+        info += ("📞🔴 اتصل فيه الحين!\n" if urgent else f"📞 كلّمه: {call}\n")
     text = (
         f"🔔 تحويل لموظف — {brand.name}\n"
         f"العميل: {wa_name or '-'} (+{customer})\n"
+        f"{info}"
         f"السبب: {reason}\n\nالملخص: {summary}\n\n"
         f"افتح المحادثة: https://wa.me/{customer}\n"
         f"↩️ أو اعمل Reply على هالرسالة وبنبعت ردك للعميل من رقم {brand.name}.\n"
