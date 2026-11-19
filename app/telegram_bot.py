@@ -329,13 +329,22 @@ async def _preview_campaign(chat_id, tpl, contacts):
                f"⚠️ رسائل التسويق مدفوعة من Meta. اكتب /confirm للإرسال أو /cancel للإلغاء.")
 
 
+_last_file = {}  # chat_id -> (document, ts): a numbers file sent without the /campaign caption
+
+
 async def _handle_campaign_file(chat_id, msg):
-    from . import campaign
     caption = (msg.get("caption") or "").strip()
     tpl = _tpl_arg(caption) if caption.lower().startswith("/campaign") else None
     if not tpl:
-        await send(chat_id, "ابعت الملف وبالتعليق (Caption) اكتب مثلاً: /campaign seen_restaurants\nشوف الأسماء بـ /templates")
+        _last_file[chat_id] = (msg["document"], time.time())
+        await send(chat_id, "📎 وصلني الملف. هلأ اكتب اسم الحملة، مثلاً:\n/campaign seen_intro_auto\n(الأسماء المتاحة: /templates)")
         return
+    await _campaign_from_document(chat_id, tpl, msg["document"])
+
+
+async def _campaign_from_document(chat_id, tpl, document):
+    from . import campaign
+    msg = {"document": document}
     try:
         info = (await _http.get(f"{API}/getFile", params={"file_id": msg["document"]["file_id"]})).json()
         path = info["result"]["file_path"]
@@ -395,7 +404,17 @@ async def _handle_campaign_cmd(chat_id, cmd, text):
                                 "الأسماء المتاحة: /templates")
             return
         body = "\n".join(text.splitlines()[1:])
-        await _preview_campaign(chat_id, tpl, campaign.parse_contacts(body))
+        contacts = campaign.parse_contacts(body)
+        recent = _last_file.get(chat_id)
+        if not contacts and recent and time.time() - recent[1] < 3600:
+            _last_file.pop(chat_id, None)
+            await _campaign_from_document(chat_id, tpl, recent[0])
+            return
+        if not contacts:
+            await send(chat_id, "ما لقيت أرقام. ابعت ملف الإكسل (أو الأرقام تحت الأمر، كل سطر رقم)، "
+                                "وبعدها اكتب /campaign " + tpl.name)
+            return
+        await _preview_campaign(chat_id, tpl, contacts)
     elif cmd == "/confirm":
         pending = _pending_campaign.pop(chat_id, None)
         tpl = campaign.get_template(pending[0]) if pending else None
