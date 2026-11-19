@@ -139,8 +139,8 @@ async def send_intro(tpl: Template, phone: str, name: str, media_id, campaign_id
     wamid = data.get("messages", [{}])[0].get("id", "")
     db.add_campaign_msg(wamid, campaign_id, brand.key, phone)
     db.set_contact_name(brand.key, phone, name)
-    db.add_message(brand.key, phone, "assistant", tpl.text_for(name))
     db.reset_lead(brand.key, phone)
+    db.add_message(brand.key, phone, "assistant", tpl.text_for(name))
     return True, ""
 
 

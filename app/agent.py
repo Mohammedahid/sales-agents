@@ -74,9 +74,9 @@ async def run_sales_agent(brand: Brand, customer: str):
         "text": sales_prompt(brand),
         "cache_control": {"type": "ephemeral"},
     }]
-    if name:
-        system.append({"type": "text", "text":
-                       f"اسم ملف العميل على واتساب: {name} (ممكن ما يكون اسمه الحقيقي، لا تناديه فيه إلا إذا عرّف بنفسه بهالاسم). رقمه: {customer}"})
+    # The WhatsApp profile name is NOT given to the model: it must ask the customer for his name.
+    system.append({"type": "text", "text":
+                   f"رقم العميل: {customer}. ما تعرف اسمه إلا إذا قاله لك بالمحادثة."})
 
     if settings.llm_provider == "gemini":
         sys_text = "\n\n".join(x["text"] for x in system)

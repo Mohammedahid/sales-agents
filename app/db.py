@@ -129,7 +129,13 @@ def history(brand, customer, limit=30):
         "ORDER BY ts DESC LIMIT ?",
         (brand, customer, limit),
     )
-    return [{"role": r["role"], "content": json.loads(r["content"])} for r in reversed(rows)]
+    out = []
+    for r in reversed(rows):
+        if r["role"] == "reset":  # a new intro was sent: forget the older conversation
+            out = []
+            continue
+        out.append({"role": r["role"], "content": json.loads(r["content"])})
+    return out
 
 
 def set_contact_name(brand, customer, name):
@@ -303,4 +309,6 @@ def latest_lead(brand, customer) -> dict:
 
 
 def reset_lead(brand, customer):
+    """Start fresh for a new intro: forget collected info and the old chat context."""
     save_lead(brand, customer, {"_reset": True})
+    add_message(brand, customer, "reset", "")
