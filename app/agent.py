@@ -302,3 +302,32 @@ async def _run_gemini(brand, customer, name, system_text, messages):
         handoff = None
     reply = _fix_words(_APOLOGY_RE.sub("", reply).strip())
     return reply, handoff
+
+
+async def transcribe_audio(mime: str, data: bytes):
+    """Voice note -> text with Gemini. Returns None if not possible."""
+    import base64 as _b64
+    if not settings.gemini_api_key or len(data) > 15 * 1024 * 1024:
+        return None
+    body = {"contents": [{"parts": [
+        {"text": "اكتب نص هالرسالة الصوتية حرفياً بنفس اللهجة اللي انقالت فيها. اكتب النص بس بدون أي تعليق. "
+                 "إذا ما فيها كلام واضح اكتب: (ما في كلام واضح)"},
+        {"inline_data": {"mime_type": mime or "audio/ogg", "data": _b64.b64encode(data).decode()}},
+    ]}]}
+    for model in dict.fromkeys([settings.gemini_model, settings.gemini_fallback_model]):
+        if not model:
+            continue
+        try:
+            async with httpx.AsyncClient(timeout=40) as c:
+                r = await c.post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                                 params={"key": settings.gemini_api_key}, json=body)
+            if r.status_code == 200:
+                parts = r.json()["candidates"][0]["content"]["parts"]
+                text = " ".join(p.get("text", "") for p in parts).strip()
+                if text:
+                    return text
+            else:
+                log.warning("transcribe %s failed: %s %s", model, r.status_code, r.text[:200])
+        except Exception as e:
+            log.warning("transcribe %s error: %s", model, type(e).__name__)
+    return None

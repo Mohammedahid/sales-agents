@@ -37,7 +37,7 @@ class Brand:
     @property
     def knowledge(self) -> str:
         parts = []
-        for name in (f"{self.key}.md", f"{self.key}-website.md"):
+        for name in (f"{self.key}.md", f"{self.key}-website.md", "company.md"):
             path = KNOWLEDGE_DIR / name
             if path.exists():
                 parts.append(path.read_text(encoding="utf-8"))

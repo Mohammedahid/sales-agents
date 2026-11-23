@@ -102,6 +102,41 @@ async def notify_paused_message(brand, customer, preview, wa_name=""):
         db.link_tg(mid, brand.key, customer)
 
 
+async def forward_media(brand, customer, kind, mime, data, caption_extra="", wa_name=""):
+    """Send a customer's photo/voice/video/file to the admins, linked for Reply."""
+    if len(data) > 45 * 1024 * 1024:
+        await broadcast(f"📎 +{customer} بعت ملف كبير ({len(data) // 1048576}MB) ما بقدر أحوّله. https://wa.me/{customer}")
+        return
+    ext = (mime.split("/")[-1] or "bin").replace("mpeg", "mp3").replace("quicktime", "mov")
+    label = {"image": "🖼️ صورة", "audio": "🎤 فويس", "video": "🎬 فيديو", "document": "📄 ملف"}.get(kind, "📎")
+    caption = (f"{label} من {wa_name or ''} +{customer} — {brand.name}\n{caption_extra}".strip()[:1000]
+               + "\n↩️ اعمل Reply عشان ترد عليه")
+    if kind == "image":
+        method, field = "sendPhoto", "photo"
+    elif kind == "audio" and mime in ("audio/ogg", "audio/opus"):
+        method, field = "sendVoice", "voice"
+    elif kind == "audio":
+        method, field = "sendAudio", "audio"
+    elif kind == "video":
+        method, field = "sendVideo", "video"
+    else:
+        method, field = "sendDocument", "document"
+    for admin in settings.telegram_admins:
+        try:
+            r = await _http.post(f"{API}/{method}", data={"chat_id": admin, "caption": caption},
+                                 files={field: (f"{kind}.{ext}", data, mime)})
+            res = r.json()
+            if not res.get("ok") and method != "sendDocument":  # e.g. unsupported format → as a file
+                r = await _http.post(f"{API}/sendDocument", data={"chat_id": admin, "caption": caption},
+                                     files={"document": (f"{kind}.{ext}", data, mime)})
+                res = r.json()
+            mid = res.get("result", {}).get("message_id")
+            if mid:
+                db.link_tg(mid, brand.key, customer)
+        except Exception as e:
+            log.error("forward media failed: %s", e)
+
+
 # ---- report -----------------------------------------------------------------
 async def build_live_context(hours=24):
     results = await health.check_all()

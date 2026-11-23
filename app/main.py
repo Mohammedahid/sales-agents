@@ -1,5 +1,6 @@
 """FastAPI app: WhatsApp webhook + background Telegram bot / monitors."""
 import asyncio
+import base64
 import logging
 import os
 import random
@@ -126,6 +127,9 @@ async def _handle_change(field, value):
         if not blocks:
             continue
         db.add_message(brand.key, customer, "user", blocks)
+        if m.get("_media"):
+            kind, mime, data, extra = m["_media"]
+            asyncio.create_task(tg.forward_media(brand, customer, kind, mime, data, extra, names.get(customer, "")))
         was_campaign = db.mark_campaign_reply(brand.key, customer)
 
         if campaign.is_stop(preview):
@@ -150,12 +154,35 @@ async def _to_blocks(brand, m):
         return [{"type": "text", "text": body}], body
     if t == "image":
         caption = m["image"].get("caption", "")
-        img = await whatsapp.download_image_b64(brand, m["image"]["id"])
+        got = await whatsapp.download_media(brand, m["image"]["id"])
         blocks = []
-        if img:
-            blocks.append({"type": "image", "source": {"type": "base64", "media_type": img[0], "data": img[1]}})
+        if got:
+            m["_media"] = ("image", got[0], got[1], caption)
+            if got[0] in ("image/jpeg", "image/png", "image/gif", "image/webp"):
+                blocks.append({"type": "image", "source": {"type": "base64", "media_type": got[0],
+                                                           "data": base64.b64encode(got[1]).decode()}})
         blocks.append({"type": "text", "text": caption or "(العميل أرسل صورة)"})
         return blocks, f"[صورة] {caption}"
+    if t == "audio":
+        got = await whatsapp.download_media(brand, m["audio"]["id"])
+        text = None
+        if got:
+            from .agent import transcribe_audio
+            text = await transcribe_audio(got[0], got[1])
+            m["_media"] = ("audio", got[0], got[1], f"النص: {text}" if text else "")
+        if text:
+            return [{"type": "text", "text": f"(رسالة صوتية من العميل، نصها:) {text}"}], f"[فويس] {text}"
+        return [{"type": "text", "text": "(العميل أرسل رسالة صوتية — ما تقدر تسمعها. اطلب منه بلطف يكتب طلبه "
+                                         "كتابة، أو اعرض تحويله لموظف)"}], "[فويس]"
+    if t in ("video", "document"):
+        d = m[t]
+        caption = d.get("caption", "") or d.get("filename", "")
+        got = await whatsapp.download_media(brand, d["id"])
+        if got:
+            m["_media"] = (t, got[0], got[1], caption)
+        what = "فيديو" if t == "video" else f"ملف {d.get('filename', '')}".strip()
+        return [{"type": "text", "text": f"(العميل أرسل {what}، ما تقدر تفتحه. {caption})".replace(". )", ")")}], \
+            f"[{what}] {caption}"
     if t == "button":
         return [{"type": "text", "text": m["button"].get("text", "")}], m["button"].get("text", "")
     if t == "interactive":
@@ -175,7 +202,7 @@ async def _to_blocks(brand, m):
         link = f"https://maps.google.com/?q={loc.get('latitude')},{loc.get('longitude')}"
         text = f"(العميل أرسل موقعه) {loc.get('name', '')} {loc.get('address', '')} {link}".strip()
         return [{"type": "text", "text": text}], f"[موقع] {link}"
-    if t in ("audio", "video", "document", "sticker"):
+    if t == "sticker":
         note = {
             "audio": "(العميل أرسل رسالة صوتية — ما تقدر تسمعها. اطلب منه بلطف يكتب طلبه كتابة، أو اعرض تحويله لموظف)",
             "location": "(العميل أرسل موقعه)",

@@ -51,19 +51,24 @@ async def mark_read_typing(brand: Brand, message_id: str):
         log.warning("typing indicator failed: %s", e)
 
 
-async def download_image_b64(brand: Brand, media_id: str):
-    """Return (media_type, base64) for an incoming image, or None."""
+async def download_media(brand: Brand, media_id: str):
+    """Return (mime_type, bytes) for an incoming media file, or None."""
     try:
         h = {"Authorization": f"Bearer {brand.access_token}"}
         meta = (await _http.get(_url(media_id), headers=h)).json()
-        data = (await _http.get(meta["url"], headers=h)).content
-        mime = meta.get("mime_type", "image/jpeg").split(";")[0]
-        if mime not in ("image/jpeg", "image/png", "image/gif", "image/webp"):
-            return None
-        return mime, base64.b64encode(data).decode()
+        data = (await _http.get(meta["url"], headers=h, timeout=60)).content
+        return meta.get("mime_type", "application/octet-stream").split(";")[0].strip(), data
     except Exception as e:
-        log.warning("image download failed: %s", e)
+        log.warning("media download failed: %s", e)
         return None
+
+
+async def download_image_b64(brand: Brand, media_id: str):
+    """Return (media_type, base64) for an incoming image, or None."""
+    got = await download_media(brand, media_id)
+    if not got or got[0] not in ("image/jpeg", "image/png", "image/gif", "image/webp"):
+        return None
+    return got[0], base64.b64encode(got[1]).decode()
 
 
 async def upload_media(brand: Brand, path, mime="application/pdf"):
