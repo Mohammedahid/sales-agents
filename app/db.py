@@ -357,3 +357,16 @@ def campaign_repliers(campaign_id=None):
             state = "bot"
         out.append({"brand": b, "customer": c, "state": state, "lead": latest_lead(b, c), "preview": preview})
     return campaign_id, out
+
+
+def full_chat(brand, customer, limit=40):
+    """Last messages of a chat (across resets) for the admin: [(role, text, ts)]."""
+    rows = _all("SELECT role, content, ts FROM messages WHERE brand=? AND customer=? AND role!='reset' "
+                "ORDER BY ts DESC LIMIT ?", (brand, customer, limit))
+    out = []
+    for r in reversed(rows):
+        c = json.loads(r["content"])
+        text = c if isinstance(c, str) else " ".join(
+            b.get("text", "") if b.get("type") == "text" else "[صورة]" for b in c if isinstance(b, dict))
+        out.append((r["role"], text, r["ts"]))
+    return out

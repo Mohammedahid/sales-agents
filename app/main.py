@@ -162,7 +162,20 @@ async def _to_blocks(brand, m):
         i = m["interactive"]
         title = (i.get("button_reply") or i.get("list_reply") or {}).get("title", "")
         return [{"type": "text", "text": title}], title
-    if t in ("audio", "video", "document", "sticker", "location", "contacts"):
+    if t == "contacts":
+        cards = []
+        for c in m.get("contacts", []):
+            nm = (c.get("name") or {}).get("formatted_name", "")
+            phones = "، ".join(p.get("phone") or p.get("wa_id", "") for p in c.get("phones", []))
+            cards.append(f"{nm}: {phones}".strip(": "))
+        text = "(العميل أرسل جهة اتصال) " + " | ".join(cards)
+        return [{"type": "text", "text": text}], f"[جهة اتصال] {' | '.join(cards)}"
+    if t == "location":
+        loc = m.get("location", {})
+        link = f"https://maps.google.com/?q={loc.get('latitude')},{loc.get('longitude')}"
+        text = f"(العميل أرسل موقعه) {loc.get('name', '')} {loc.get('address', '')} {link}".strip()
+        return [{"type": "text", "text": text}], f"[موقع] {link}"
+    if t in ("audio", "video", "document", "sticker"):
         note = {
             "audio": "(العميل أرسل رسالة صوتية — ما تقدر تسمعها. اطلب منه بلطف يكتب طلبه كتابة، أو اعرض تحويله لموظف)",
             "location": "(العميل أرسل موقعه)",

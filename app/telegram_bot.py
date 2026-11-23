@@ -6,6 +6,7 @@ Commands:
   /leads     آخر العملاء المحتملين
   /handoffs  المحادثات المحوّلة للموظفين
   /waiting   الزباين اللي مستنيين ردك
+  /chat <رقم>  المحادثة كاملة مع زبون (أو Reply على أي تنبيه واكتب /chat)
   /replies   مين رد على آخر حملة ووين وصل كل واحد
   /paused    المحادثات اللي البوت موقف فيها
   /resume 966XXXXXXXXX   رجّع البوت يرد على عميل (أو /resume all)
@@ -156,7 +157,7 @@ async def handle_update(u):
 
     # Reply to an alert → relay to WhatsApp customer
     reply_to = msg.get("reply_to_message")
-    if reply_to:
+    if reply_to and not text.startswith("/"):
         target = db.tg_target(reply_to["message_id"])
         if target:
             brand = settings.brands[target[0]]
@@ -241,6 +242,37 @@ async def handle_update(u):
         await send(chat_id, "\n\n".join(
             f"• [{settings.brands[r['brand']].name}] +{r['customer']}\n{r['reason']}: {r['summary']}" for r in rows
         ) or "ما في تحويلات مفتوحة.")
+    elif cmd == "/chat":
+        from . import campaign as _c
+        parts = text.split()
+        target = None
+        if len(parts) > 1:
+            phone = _c.normalize_phone(parts[1])
+            for key in settings.brands:
+                if db.full_chat(key, phone, 1):
+                    target = (key, phone)
+                    break
+        elif msg.get("reply_to_message"):
+            target = db.tg_target(msg["reply_to_message"]["message_id"])
+        if not target:
+            await send(chat_id, "اكتب /chat ورقم الزبون، مثلاً: /chat 0551234567\nأو اعمل Reply على تنبيه الزبون واكتب /chat")
+        else:
+            key, phone = target
+            rows = db.full_chat(key, phone)
+            tz = ZoneInfo("Asia/Riyadh")
+            who = {"user": "👤 الزبون", "assistant": "💬 إحنا"}
+            lines = [f"🗂️ محادثة +{phone} ({settings.brands[key].name}) — آخر {len(rows)} رسالة:"]
+            for role, t, ts in rows:
+                lines.append(f"{who.get(role, role)} {datetime.fromtimestamp(ts, tz):%d/%m %H:%M}:\n{t[:700]}")
+            chunk = ""
+            for line in lines:
+                if len(chunk) + len(line) > 3500:
+                    await send(chat_id, chunk)
+                    chunk = ""
+                chunk += line + "\n\n"
+            mid = await send(chat_id, chunk + f"↩️ اعمل Reply على هالرسالة عشان ترد على الزبون.")
+            if mid:
+                db.link_tg(mid, key, phone)
     elif cmd == "/waiting":
         rows = db.waiting_for_human()
         if not rows:
